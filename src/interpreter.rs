@@ -15,6 +15,7 @@ use std::{
     process::{Command, ExitStatus},
 };
 
+use home::home_dir;
 use serde::{Deserialize, Deserializer};
 use zip::ZipArchive;
 
@@ -200,7 +201,7 @@ fn execute_function(function: &str, args: &[&str], data: &ExecutionData) -> Resu
 
         "install" if *args.first().ok_or(String::from("No source file"))? == "bin" => fs::copy(
             args.get(1).ok_or(String::from("No binary file"))?,
-            home::home_dir()
+            home_dir()
                 .ok_or(String::from("Cannot get home folder"))?
                 .join(".cytrick/bin")
                 .join(
@@ -218,7 +219,7 @@ fn execute_function(function: &str, args: &[&str], data: &ExecutionData) -> Resu
 
         "install" => fs::copy(
             args.first().ok_or(String::from("No source file/dir"))?,
-            home::home_dir()
+            home_dir()
                 .ok_or(String::from("Cannot get home folder"))?
                 .create_and_join(format!(".cytrick/{}", data.name))
                 .map_err(|e| format!("Cannot create project folder: {e}"))?

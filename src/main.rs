@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 pub mod interpreter;
+pub mod setup;
 
 use std::{path::PathBuf, process::exit};
 
@@ -25,6 +26,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Version,
+    Setup,
     Run {
         #[arg(long, default_value = ".trick")]
         file: String,
@@ -37,6 +39,13 @@ fn main() {
     match cli.command {
         Some(Commands::Version) => {
             println!("Cytrick version 0.1.0.0");
+        }
+
+        Some(Commands::Setup) => {
+            if let Err(message) = setup::setup() {
+                eprintln!("Error during setup: {message}");
+                exit(1);
+            }
         }
 
         Some(Commands::Run { file }) => {
