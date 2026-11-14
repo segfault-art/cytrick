@@ -1,0 +1,6 @@
+version: 0.1.0
+name: Cytrick
+
+build:
+  - run cargo build
+  - install bin target/debug/cytrick cyt
