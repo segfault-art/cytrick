@@ -9,12 +9,12 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-pub mod interpreter;
-pub mod setup;
-
 use std::{path::PathBuf, process::exit};
 
 use clap::{Parser, Subcommand};
+
+use cytrick::interpreter;
+use cytrick::setup;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -31,6 +31,11 @@ enum Commands {
         #[arg(long, default_value = ".trick")]
         file: String,
     },
+
+    Update {
+        #[arg(long, default_value = ".")]
+        folder: String,
+    },
 }
 
 fn main() {
@@ -38,12 +43,12 @@ fn main() {
 
     match cli.command {
         Some(Commands::Version) => {
-            println!("Cytrick version 0.1.0.0");
+            println!("Cytrick version {}", env!("CARGO_PKG_VERSION"));
         }
 
         Some(Commands::Setup) => {
-            if let Err(message) = setup::setup() {
-                eprintln!("Error during setup: {message}");
+            if let Err(err) = setup::setup() {
+                eprintln!("Error during setup: {err}");
                 exit(1);
             }
         }
@@ -51,17 +56,23 @@ fn main() {
         Some(Commands::Run { file }) => {
             let trick = match interpreter::deserialize(PathBuf::from(file)) {
                 Ok(trick) => trick,
-                Err(message) => {
-                    eprintln!("Cannot deserialize .trick file: {message}");
+                Err(err) => {
+                    eprintln!("Cannot deserialize .trick file: {err}");
                     exit(1);
                 }
             };
 
             println!("Installing {} version {}", trick.name, trick.version);
-            if let Err(message) = interpreter::execute_all(trick) {
-                eprintln!("Cannot run .trick file: {message}");
+            if let Err(err) = interpreter::execute_all(trick) {
+                eprintln!("Error running .trick file: {err}");
                 exit(1);
             }
+
+            println!("Installed project successfully!");
+        }
+
+        Some(Commands::Update { folder }) => {
+            interpreter::update(&folder);
         }
 
         None => {

@@ -9,14 +9,16 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use home::home_dir;
+use rusqlite::{Connection, ErrorCode};
+use serde::{Deserialize, Deserializer};
+use std::process::exit;
 use std::{
     env, fmt, fs, io,
-    path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    path::PathBuf,
+    process::{Command, ExitStatus, Stdio},
 };
-
-use home::home_dir;
-use serde::{Deserialize, Deserializer};
+use symlink::{remove_symlink_file, symlink_file};
 use zip::ZipArchive;
 
 #[derive(Debug)]
@@ -34,22 +36,39 @@ pub struct Trick {
     build: Vec<String>,
 }
 
-struct ExecutionData<'a> {
+pub struct ExecutionData<'a> {
     #[allow(dead_code)]
-    version: &'a Version,
-    name: &'a str,
+    pub version: &'a Version,
+    pub name: &'a str,
 }
 
-pub trait PathExt {
-    fn create_and_join<P: AsRef<Path>>(&self, sub: P) -> io::Result<PathBuf>;
-}
+#[allow(dead_code)]
+pub enum Status {
+    Installed {
+        bin: bool,
+        name: String,
+        file: PathBuf,
+        source: PathBuf,
+    },
 
-impl<T: AsRef<Path> + ?Sized> PathExt for T {
-    fn create_and_join<P: AsRef<Path>>(&self, sub: P) -> io::Result<PathBuf> {
-        let novo = self.as_ref().join(sub);
-        fs::create_dir_all(&novo)?;
-        Ok(novo)
-    }
+    Downloaded {
+        url: String,
+        file: PathBuf,
+    },
+
+    Extracted {
+        item: PathBuf,
+        source: PathBuf,
+    },
+
+    Ran {
+        program: String,
+        args: Vec<String>,
+    },
+
+    Shell {
+        command: String,
+    },
 }
 
 impl fmt::Display for Version {
@@ -111,127 +130,242 @@ fn system(command: &str) -> io::Result<ExitStatus> {
 
 pub fn execute_all(trick: Trick) -> Result<(), String> {
     let mut err: Option<String> = None;
+    let mut i: usize = 1;
+    let mut binaries: Vec<String> = Vec::new();
+    let conn = Connection::open(
+        home_dir()
+            .ok_or(String::from("Cannot get home dir"))?
+            .join(".cytrick/data/projects.db"),
+    )
+    .map_err(|e| format!("Cannot open data file: {e}, try run `cyt setup`"))?;
+
     let data = ExecutionData {
         version: &trick.version,
         name: &trick.name,
     };
 
     for command in trick.build {
-        if let Err(message) = execute(command.as_ref(), &data) {
-            err = Some(message);
-            break;
+        match execute(&command, &data) {
+            Ok(status) => match status {
+                Status::Installed { bin, name, .. } => {
+                    if bin {
+                        binaries.push(name);
+                    }
+                }
+
+                _ => {}
+            },
+
+            Err(e) => {
+                err = Some(format!(
+                    "Error executing command ({command}): {e}. Command {i}"
+                ));
+                break;
+            }
+        }
+
+        i += 1;
+    }
+
+    if let Err(err) = conn.execute(
+        "INSERT INTO project (binaries, version, name, repo) VALUES (?, ?, ?, ?)",
+        (
+            binaries.join(","),
+            &trick.version.to_string(),
+            &trick.name,
+            None::<&str>,
+        ),
+    ) {
+        if let Some(ErrorCode::ConstraintViolation) = err.sqlite_error_code() {
+            println!("Project already installed, overwriting");
+            conn.execute(
+                "UPDATE project SET
+                    binaries = ?,
+                    version = ?
+                WHERE name = ?
+                ",
+                (binaries.join(","), &trick.version.to_string(), &trick.name),
+            )
+            .map_err(|e| format!("Failed to update project: {e}"))?;
+        } else {
+            return Err(format!("Failed to install project: {err}"));
         }
     }
 
     match err {
-        Some(message) => Err(message),
+        Some(err) => Err(err),
         None => Ok(()),
     }
 }
 
-fn execute(command: &str, data: &ExecutionData) -> Result<(), String> {
-    let mut splitted = command.split_whitespace();
+fn execute(command: &str, data: &ExecutionData) -> Result<Status, String> {
+    let mut split = command.split_whitespace();
 
-    if let Some(function) = splitted.next() {
-        execute_function(function, splitted.collect::<Vec<&str>>().as_ref(), data)
+    if let Some(function) = split.next() {
+        execute_function(function, &split.collect::<Vec<&str>>(), data)
     } else {
         Err(String::from("Empty"))
     }
 }
 
-fn execute_function(function: &str, args: &[&str], data: &ExecutionData) -> Result<(), String> {
+fn run(args: &[&str]) -> Result<Status, String> {
+    let program = String::from(*args.first().ok_or(String::from("No program"))?);
+    let args = args
+        .get(1..)
+        .unwrap_or(&[])
+        .iter()
+        .map(|e| String::from(*e))
+        .collect::<Vec<String>>();
+
+    let status = Command::new(&program)
+        .args(&args)
+        .status()
+        .map_err(|e| format!("Cannot spawn process: {e}"))?;
+
+    if status.success() {
+        Ok(Status::Ran { program, args })
+    } else {
+        Err(format!("Program returned error: {status}"))
+    }
+}
+
+fn shell(args: &[&str]) -> Result<Status, String> {
+    let command = args.join(" ");
+    let status = system(&command).map_err(|e| format!("Cannot execute command: {e}"))?;
+
+    if status.success() {
+        Ok(Status::Shell { command })
+    } else {
+        Err(format!("Command returned error: {status}"))
+    }
+}
+
+fn download(args: &[&str]) -> Result<Status, String> {
+    let url = *args.first().ok_or(String::from("No URL"))?;
+    let file = PathBuf::from(args.get(1).ok_or(String::from("No destination path"))?);
+    let mut reply = reqwest::blocking::get(url)
+        .map_err(|e| format!("Cannot download file: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("URL returned bad status: {e}"))?;
+
+    fs::create_dir_all(
+        file.parent()
+            .ok_or(String::from("Cannot access folder's parent"))?,
+    )
+    .map_err(|e| format!("Cannot create directory: {e}"))?;
+
+    reply
+        .copy_to(&mut fs::File::create(&file).map_err(|e| format!("Cannot create file: {e}"))?)
+        .map_err(|e| format!("Cannot write in file: {e}"))?;
+
+    Ok(Status::Downloaded {
+        url: url.to_owned(),
+        file,
+    })
+}
+
+fn extract(args: &[&str]) -> Result<Status, String> {
+    let source = PathBuf::from(*args.first().ok_or("No archive")?);
+    let item = PathBuf::from(*args.get(1).ok_or("No destination path")?);
+
+    let file = fs::File::open(&source).map_err(|e| format!("Cannot open archive: {e}"))?;
+    let mut zip = ZipArchive::new(file).map_err(|e| format!("Invalid zip: {e}"))?;
+
+    fs::create_dir_all(&item).map_err(|e| format!("Cannot create directory: {e}"))?;
+    zip.extract(&item)
+        .map_err(|e| format!("Cannot extract: {e}"))?;
+
+    Ok(Status::Extracted { item, source })
+}
+
+pub fn install(args: &[&str], data: &ExecutionData) -> Result<Status, String> {
+    let home = home_dir().ok_or(String::from("Cannot get the home folder"))?;
+    let name = get_name(args[0], args.get(1).and_then(|v| Some(*v)))?;
+    let source = args.first().ok_or(String::from("No source file"))?;
+    let file = home.join(format!(".cytrick/{}/{}", data.name, name));
+
+    fs::create_dir_all(home.join(format!(".cytrick/{}", data.name)))
+        .map_err(|e| format!("Cannot create project directory: {e}"))?;
+    fs::copy(&source, &file).map_err(|e| format!("Cannot copy file: {e}"))?;
+
+    Ok(Status::Installed {
+        bin: false,
+        name,
+        file,
+        source: source.into(),
+    })
+}
+
+fn get_name(path: &str, new_name: Option<&str>) -> Result<String, String> {
+    Ok(new_name
+        .unwrap_or(
+            PathBuf::from(path)
+                .file_name()
+                .ok_or(String::from("Cannot get file name"))?
+                .to_str()
+                .ok_or(String::from("Not valid UTF-8"))?,
+        )
+        .to_owned())
+}
+
+pub fn install_bin(args: &[&str], data: &ExecutionData) -> Result<Status, String> {
+    let home = home_dir().ok_or(String::from("Cannot get the home folder"))?;
+    let name = get_name(args[1], args.get(2).and_then(|v| Some(*v)))?;
+    let source = args.get(1).ok_or(String::from("No source file"))?;
+    let file = home.join(format!(".cytrick/bin/{}", name));
+    let link_source = home.join(format!(".cytrick/{}/{}", data.name, name));
+
+    install(args.get(1..).unwrap(), data)?;
+
+    if let Err(err) = symlink_file(&link_source, &file) {
+        if err.kind() == io::ErrorKind::AlreadyExists {
+            println!("Symlink already exists, overwriting");
+
+            remove_symlink_file(&file).map_err(|e| format!("Cannot remove symlink: {e}"))?;
+            symlink_file(&link_source, &file).map_err(|e| format!("Cannot create symlink: {e}"))?;
+        } else {
+            return Err(format!("Cannot create symlink: {err}"));
+        }
+    }
+
+    Ok(Status::Installed {
+        bin: true,
+        name,
+        file,
+        source: source.into(),
+    })
+}
+
+fn execute_function(function: &str, args: &[&str], data: &ExecutionData) -> Result<Status, String> {
     match function {
-        "run" => Command::new(args.first().ok_or(String::from("No program"))?)
-            .args(args.get(1..).unwrap_or(&[]))
-            .status()
-            .map_err(|e| format!("Cannot spawn process: {e}"))
-            .and_then(|s| {
-                if s.success() {
-                    Ok(())
-                } else {
-                    Err(String::from(format!(
-                        "Process returned error ({})",
-                        s.code()
-                            .ok_or(String::from("Process terminated by signal"))?
-                    )))
-                }
-            }),
+        "run" => run(args),
+        "shell" => shell(args),
+        "download" => download(args),
+        "extract" => extract(args),
+        "install" if *args.first().ok_or(String::from("No source file"))? == "bin" => {
+            install_bin(args, data)
+        }
 
-        "shell" => system(args.join(" ").as_ref())
-            .map_err(|e| format!("Cannot execute command: {e}"))
-            .and_then(|s| {
-                if s.success() {
-                    Ok(())
-                } else {
-                    Err(String::from(format!(
-                        "Command returned error ({})",
-                        s.code()
-                            .ok_or(String::from("Process terminated by signal"))?
-                    )))
-                }
-            }),
-
-        "download" => Command::new("curl")
-            .args(&[
-                "-L",
-                "--fail",
-                "-O",
-                args.first().ok_or(String::from("No URL"))?,
-            ])
-            .status()
-            .map_err(|e| format!("Cannot download file: {e}"))
-            .and_then(|s| {
-                if s.success() {
-                    Ok(())
-                } else {
-                    Err(String::from(format!(
-                        "Curl returned error ({})",
-                        s.code().ok_or(String::from("Curl terminated by signal"))?
-                    )))
-                }
-            }),
-
-        "extract" => ZipArchive::new(
-            fs::File::open(args.first().ok_or(String::from("No file"))?)
-                .map_err(|e| format!("Cannot open file: {e}"))?,
-        )
-        .map_err(|e| format!("Cannot open file as zip file: {e}"))?
-        .extract(args.get(1).ok_or(String::from("No output directory"))?)
-        .map_err(|e| format!("Cannot extract file: {e}")),
-
-        "install" if *args.first().ok_or(String::from("No source file"))? == "bin" => fs::copy(
-            args.get(1).ok_or(String::from("No binary file"))?,
-            home_dir()
-                .ok_or(String::from("Cannot get home folder"))?
-                .join(".cytrick/bin")
-                .join(
-                    args.get(2).copied().unwrap_or(
-                        PathBuf::from(args.get(1).unwrap())
-                            .file_name()
-                            .ok_or(String::from("Cannot get source file name"))?
-                            .to_str()
-                            .ok_or(String::from("Final name is not encoded with UTF-8"))?,
-                    ),
-                ),
-        )
-        .map_err(|e| format!("Cannot install binary: {e}"))
-        .and_then(|_| Ok(())),
-
-        "install" => fs::copy(
-            args.first().ok_or(String::from("No source file/dir"))?,
-            home_dir()
-                .ok_or(String::from("Cannot get home folder"))?
-                .create_and_join(format!(".cytrick/{}", data.name))
-                .map_err(|e| format!("Cannot create project folder: {e}"))?
-                .join(
-                    PathBuf::from(args.first().unwrap())
-                        .file_name()
-                        .ok_or(String::from("Cannot get source file name"))?,
-                ),
-        )
-        .map_err(|e| format!("Cannot install file/folder: {e}"))
-        .and_then(|_| Ok(())),
-
+        "install" => install(args, data),
         _ => Err(format!("Unknown function: {function}")),
     }
+}
+
+pub fn update(folder: &str) -> ! {
+    let old_cwd = env::current_dir().expect("Cannot get current directory");
+    let updater = env::current_exe()
+        .expect("Failed to get current executable")
+        .parent()
+        .unwrap()
+        .join("updater");
+
+    env::set_current_dir(folder).expect("Failed to set current directory");
+
+    let _ = Command::new(updater)
+        .args([old_cwd])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    exit(0);
 }

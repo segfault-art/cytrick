@@ -1,6 +1,6 @@
 [package]
 name = "cytrick"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -10,5 +10,7 @@ home = "0.5.12"
 noyalib = "0.0.60"
 onpath = "0.2.0"
 reqwest = { version = "0.13.5", features = ["blocking"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
+symlink = "0.1.0"
 zip = "9.5.1"

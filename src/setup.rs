@@ -12,16 +12,38 @@
 use std::fs;
 
 use home::home_dir;
+use rusqlite::Connection;
 
 pub fn setup() -> Result<(), String> {
-    let bin_dir = home_dir()
+    let base_dir = home_dir()
         .ok_or(String::from("Cannot get home directory"))?
-        .join(".cytrick/bin");
+        .join(".cytrick");
+
+    let bin_dir = base_dir.join("bin");
+    let data_dir = base_dir.join("data");
 
     fs::create_dir_all(&bin_dir)
         .map_err(|e| format!("Cannot create Cytrick binaries directory: {e}"))?;
     let _ = onpath::add(bin_dir, "cytrick")
         .map_err(|e| format!("Cannot add Cytrick binaries directory to PATH: {e}"))?;
 
+    fs::create_dir_all(&data_dir).map_err(|e| format!("Cannot create data directory: {e}"))?;
+
+    let conn = Connection::open(data_dir.join("projects.db"))
+        .map_err(|e| format!("Cannot open data file: {e}"))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS project (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            binaries TEXT NOT NULL,
+            version TEXT NOT NULL,
+            name TEXT NOT NULL UNIQUE,
+            repo TEXT UNIQUE
+        )",
+        [],
+    )
+    .map_err(|e| format!("Cannot create project table: {e}"))?;
+
+    println!("Setup executed successfully");
     Ok(())
 }

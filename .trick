@@ -1,6 +1,7 @@
-version: 0.1.0
+version: 0.1.1
 name: Cytrick
 
 build:
-  - run cargo build
-  - install bin target/debug/cytrick cyt
+  - run cargo build --release
+  - install bin target/release/cytrick cyt
+  - install target/release/updater
