@@ -19,7 +19,7 @@ use std::{
     process::{Command, ExitStatus, Stdio},
 };
 use symlink::{remove_symlink_file, symlink_file};
-use zip::ZipArchive;
+use zip::{ZipArchive, read::root_dir_common_filter};
 
 #[derive(Debug)]
 pub struct Version {
@@ -177,7 +177,7 @@ pub fn execute_all(trick: Trick) -> Result<(), String> {
         ),
     ) {
         if let Some(ErrorCode::ConstraintViolation) = err.sqlite_error_code() {
-            println!("Project already installed, overwriting");
+            eprintln!("{err}");
             conn.execute(
                 "UPDATE project SET
                     binaries = ?,
@@ -243,7 +243,7 @@ fn shell(args: &[&str]) -> Result<Status, String> {
 fn download(args: &[&str]) -> Result<Status, String> {
     let url = *args.first().ok_or(String::from("No URL"))?;
     let file = PathBuf::from(args.get(1).ok_or(String::from("No destination path"))?);
-    let mut reply = reqwest::blocking::get(url)
+    let mut response = reqwest::blocking::get(url)
         .map_err(|e| format!("Cannot download file: {e}"))?
         .error_for_status()
         .map_err(|e| format!("URL returned bad status: {e}"))?;
@@ -254,7 +254,7 @@ fn download(args: &[&str]) -> Result<Status, String> {
     )
     .map_err(|e| format!("Cannot create directory: {e}"))?;
 
-    reply
+    response
         .copy_to(&mut fs::File::create(&file).map_err(|e| format!("Cannot create file: {e}"))?)
         .map_err(|e| format!("Cannot write in file: {e}"))?;
 
@@ -264,18 +264,26 @@ fn download(args: &[&str]) -> Result<Status, String> {
     })
 }
 
-fn extract(args: &[&str]) -> Result<Status, String> {
+pub fn extract(args: &[&str]) -> Result<Status, String> {
     let source = PathBuf::from(*args.first().ok_or("No archive")?);
-    let item = PathBuf::from(*args.get(1).ok_or("No destination path")?);
+    let dest = PathBuf::from(*args.get(1).ok_or("No destination path")?);
 
-    let file = fs::File::open(&source).map_err(|e| format!("Cannot open archive: {e}"))?;
+    let file = fs::File::open(&source).map_err(|e| format!("Cannot open source archive: {e}"))?;
     let mut zip = ZipArchive::new(file).map_err(|e| format!("Invalid zip: {e}"))?;
 
-    fs::create_dir_all(&item).map_err(|e| format!("Cannot create directory: {e}"))?;
-    zip.extract(&item)
-        .map_err(|e| format!("Cannot extract: {e}"))?;
+    if let Some(remove_root) = args.get(2) {
+        if *remove_root == "no-root" {
+            zip.extract_unwrapped_root_dir(&dest, root_dir_common_filter)
+                .map_err(|e| format!("Cannot extract directory: {e}"))?;
+        } else {
+            return Err(format!("Unknown option: {remove_root}"));
+        }
+    } else {
+        zip.extract(&dest)
+            .map_err(|e| format!("Cannot extract directory: {e}"))?;
+    }
 
-    Ok(Status::Extracted { item, source })
+    Ok(Status::Extracted { item: dest, source })
 }
 
 pub fn install(args: &[&str], data: &ExecutionData) -> Result<Status, String> {

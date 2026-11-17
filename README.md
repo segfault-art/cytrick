@@ -19,7 +19,7 @@ Cytrick exists to simplify this process.
 The goal is to provide an experience like this:
 
 ```bash
-cyt install project
+cyt install user/project
 ```
 
 A single command to handle the entire installation process.
@@ -40,8 +40,9 @@ Available operations include:
 - Installing files and binaries into Cytrick directories.
 - Keeping track of installed projects in a local database.
 - Updating Cytrick itself from its source code.
+- Fetching projects from GitHub (`cyt install project`).
 
-Not implemented yet:
+  Not implemented yet:
 
 - Fetching projects from GitHub (`cyt install project`).
 - Extracting archives other than ZIP (such as `.tar.gz`).
@@ -81,6 +82,7 @@ cyt version
 | `cyt run [--file <path>]`      | Runs a `.trick` file. Defaults to `.trick` in the current directory.                                                  |
 | `cyt update [--folder <path>]` | Rebuilds Cytrick from its source folder and replaces the installed binary. Defaults to `.`; no `.trick` file needed.  |
 | `cyt version`                  | Shows the installed version.                                                                                          |
+| `cyt install <project>`        | Install the project from Github.                                                                                      |
 
 ### Updating Cytrick
 

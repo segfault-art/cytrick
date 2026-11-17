@@ -12,7 +12,7 @@
 use std::{path::PathBuf, process::exit};
 
 use clap::{Parser, Subcommand};
-
+use cytrick::github::install_github_project;
 use cytrick::interpreter;
 use cytrick::setup;
 
@@ -35,6 +35,10 @@ enum Commands {
     Update {
         #[arg(long, default_value = ".")]
         folder: String,
+    },
+
+    Install {
+        repo: String,
     },
 }
 
@@ -73,6 +77,12 @@ fn main() {
 
         Some(Commands::Update { folder }) => {
             interpreter::update(&folder);
+        }
+
+        Some(Commands::Install { repo }) => {
+            if let Err(err) = install_github_project(&repo) {
+                eprintln!("Cannot install project: {err}");
+            }
         }
 
         None => {
