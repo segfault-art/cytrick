@@ -1,0 +1,17 @@
+name: test-win
+on: workflow_dispatch
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: Setup
+        run: target\release\cytrick.exe setup
+      - name: Install
+        run: target\release\cytrick.exe run
+      - name: Test
+        run: cyt version
