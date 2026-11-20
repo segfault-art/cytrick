@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Segfault
+// Copyright (c) 2026 Project Contributors
 //
 // Licensed under either of the following licenses, at your option:
 //
@@ -72,7 +72,7 @@ pub fn install_github_project(project: &str) -> Result<(), String> {
     let trick = deserialize(PathBuf::from("tmp/.trick"))
         .map_err(|e| format!("Error deserializing trick file: {e}"))?;
     env::set_current_dir("tmp").map_err(|e| format!("Error setting current_dir: {e}"))?;
-    execute_all(trick)?;
+    execute_all(trick, Some(project))?;
 
     match env::current_dir() {
         Err(err) => {

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Segfault
+// Copyright (c) 2026 Project Contributors
 //
 // Licensed under either of the following licenses, at your option:
 //

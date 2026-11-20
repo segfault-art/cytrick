@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Segfault
+// Copyright (c) 2026 Project Contributors
 //
 // Licensed under either of the following licenses, at your option:
 //
@@ -9,56 +9,29 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use cytrick::interpreter::{ExecutionData, Version, install_bin};
-use std::{
-    env,
-    env::{args, consts::EXE_EXTENSION},
-    process::{Command, Stdio, exit},
-    thread::sleep,
-    time::Duration,
-};
+use cytrick::github::install_github_project;
+use cytrick::interpreter::{deserialize, execute_all};
+
+use std::env::args;
+use std::path::PathBuf;
 
 fn main() {
-    let arg = args().skip(1).next().expect("Failed to get argument");
+    let dir = args().nth(1).expect("Failed to get argument");
+    let github = args().nth(2).expect("Failed to get argument");
 
-    let version = Version {
-        major: env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap(),
-        minor: env!("CARGO_PKG_VERSION_MINOR").parse().unwrap(),
-        patch: env!("CARGO_PKG_VERSION_PATCH").parse().unwrap(),
-    };
-
-    let extension = format!(
-        "{}{}",
-        if EXE_EXTENSION.is_empty() { "" } else { "." },
-        EXE_EXTENSION
-    );
-
-    sleep(Duration::from_secs(1));
-    if let Ok(status) = Command::new("cargo")
-        .args(["build", "--release"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        if !status.success() {
-            eprintln!("Failed to build Cytrick binaries");
-            exit(1);
-        }
+    if github == "yes" {
+        update_from_github();
     } else {
-        eprintln!("Failed to build Cytrick binaries");
-        exit(1);
+        update(&dir);
     }
+}
 
-    install_bin(
-        &["bin", &format!("target/release/cytrick{extension}"), "cyt"],
-        &ExecutionData {
-            version: &version,
-            name: "Cytrick",
-        },
-    )
-    .expect("Failed to install binary");
+fn update(dir: &str) {
+    let trick =
+        deserialize(PathBuf::from(dir).join(".trick")).expect("Failed to deserialize trick");
+    execute_all(trick, Some("segfault-art/Cytrick")).expect("Failed to execute trick");
+}
 
-    env::set_current_dir(arg).expect("Failed to set current directory");
-    println!("Autoinstalled successfully");
+fn update_from_github() {
+    install_github_project("segfault-art/cytrick").expect("Failed to install Cytrick");
 }

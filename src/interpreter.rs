@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Segfault
+// Copyright (c) 2026 Project Contributors
 //
 // Licensed under either of the following licenses, at your option:
 //
@@ -9,9 +9,12 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::sql;
 use home::home_dir;
-use rusqlite::{Connection, ErrorCode};
+use rusqlite::ErrorCode;
 use serde::{Deserialize, Deserializer};
+use std::collections::HashMap;
+use std::env::consts::EXE_SUFFIX;
 use std::process::exit;
 use std::{
     env, fmt, fs, io,
@@ -128,33 +131,26 @@ fn system(command: &str) -> io::Result<ExitStatus> {
     process.status()
 }
 
-pub fn execute_all(trick: Trick) -> Result<(), String> {
+pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
     let mut err: Option<String> = None;
-    let mut i: usize = 1;
     let mut binaries: Vec<String> = Vec::new();
-    let conn = Connection::open(
-        home_dir()
-            .ok_or(String::from("Cannot get home dir"))?
-            .join(".cytrick/data/projects.db"),
-    )
-    .map_err(|e| format!("Cannot open data file: {e}, try run `cyt setup`"))?;
+    let conn = sql::create_connection()
+        .map_err(|e| format!("Cannot open data file: {e}, try run `cyt setup`"))?;
 
     let data = ExecutionData {
         version: &trick.version,
         name: &trick.name,
     };
 
-    for command in trick.build {
+    for (i, command) in (1..).zip(trick.build) {
         match execute(&command, &data) {
-            Ok(status) => match status {
-                Status::Installed { bin, name, .. } => {
-                    if bin {
-                        binaries.push(name);
-                    }
+            Ok(status) => {
+                if let Status::Installed { bin, name, .. } = status
+                    && bin
+                {
+                    binaries.push(name);
                 }
-
-                _ => {}
-            },
+            }
 
             Err(e) => {
                 err = Some(format!(
@@ -163,32 +159,31 @@ pub fn execute_all(trick: Trick) -> Result<(), String> {
                 break;
             }
         }
-
-        i += 1;
     }
 
-    if let Err(err) = conn.execute(
-        "INSERT INTO project (binaries, version, name, repo) VALUES (?, ?, ?, ?)",
-        (
-            binaries.join(","),
-            &trick.version.to_string(),
-            &trick.name,
-            None::<&str>,
-        ),
+    if let Err(err) = sql::new_project(
+        &conn,
+        &sql::ProjectRef {
+            binaries: &binaries.iter().map(String::as_str).collect::<Vec<&str>>(),
+            version: &trick.version,
+            name: &trick.name,
+            repo,
+        },
     ) {
         if let Some(ErrorCode::ConstraintViolation) = err.sqlite_error_code() {
-            eprintln!("{err}");
-            conn.execute(
-                "UPDATE project SET
-                    binaries = ?,
-                    version = ?
-                WHERE name = ?
-                ",
-                (binaries.join(","), &trick.version.to_string(), &trick.name),
+            eprintln!("Project already installed, overwriting...");
+            sql::update_project(
+                &conn,
+                &trick.name,
+                &HashMap::from([
+                    ("binaries", Some::<&str>(&binaries.join(","))),
+                    ("version", Some(&trick.version.to_string())),
+                    ("repo", repo),
+                ]),
             )
-            .map_err(|e| format!("Failed to update project: {e}"))?;
+            .map_err(|e| format!("Failed to update project in database: {e}"))?;
         } else {
-            return Err(format!("Failed to install project: {err}"));
+            return Err(format!("Failed to add project to database: {err}"));
         }
     }
 
@@ -202,10 +197,49 @@ fn execute(command: &str, data: &ExecutionData) -> Result<Status, String> {
     let mut split = command.split_whitespace();
 
     if let Some(function) = split.next() {
-        execute_function(function, &split.collect::<Vec<&str>>(), data)
+        let args = process_args(&split.collect::<Vec<&str>>());
+
+        execute_function(
+            function,
+            &args.iter().map(String::as_ref).collect::<Vec<&str>>(),
+            data,
+        )
     } else {
         Err(String::from("Empty"))
     }
+}
+
+fn process_args(args: &[&str]) -> Vec<String> {
+    let mut i = 0;
+    let mut result: Vec<String> = Vec::new();
+
+    while i < args.len() {
+        if args[i].starts_with("%{") && args[i].ends_with("}%") {
+            match args[i] {
+                "%{bin}%" => {
+                    if args.len() == i {
+                        eprintln!("Warning: Unused modifier 'bin'");
+                    } else {
+                        result.push(format!("{}{EXE_SUFFIX}", args[i + 1]));
+                    }
+
+                    i += 2;
+                }
+
+                // More modifiers in future
+                _ => {
+                    eprintln!("Warning: Unknown modifier '{}'", args[i]);
+
+                    i += 1;
+                }
+            }
+        } else {
+            result.push(args[i].into());
+            i += 1;
+        }
+    }
+
+    result
 }
 
 fn run(args: &[&str]) -> Result<Status, String> {
@@ -288,13 +322,13 @@ pub fn extract(args: &[&str]) -> Result<Status, String> {
 
 pub fn install(args: &[&str], data: &ExecutionData) -> Result<Status, String> {
     let home = home_dir().ok_or(String::from("Cannot get the home folder"))?;
-    let name = get_name(args[0], args.get(1).and_then(|v| Some(*v)))?;
+    let name = get_name(args[0], args.get(1).copied())?;
     let source = args.first().ok_or(String::from("No source file"))?;
     let file = home.join(format!(".cytrick/{}/{}", data.name, name));
 
     fs::create_dir_all(home.join(format!(".cytrick/{}", data.name)))
         .map_err(|e| format!("Cannot create project directory: {e}"))?;
-    fs::copy(&source, &file).map_err(|e| format!("Cannot copy file: {e}"))?;
+    fs::copy(source, &file).map_err(|e| format!("Cannot copy file: {e}"))?;
 
     Ok(Status::Installed {
         bin: false,
@@ -318,7 +352,7 @@ fn get_name(path: &str, new_name: Option<&str>) -> Result<String, String> {
 
 pub fn install_bin(args: &[&str], data: &ExecutionData) -> Result<Status, String> {
     let home = home_dir().ok_or(String::from("Cannot get the home folder"))?;
-    let name = get_name(args[1], args.get(2).and_then(|v| Some(*v)))?;
+    let name = get_name(args[1], args.get(2).copied())?;
     let source = args.get(1).ok_or(String::from("No source file"))?;
     let file = home.join(format!(".cytrick/bin/{}", name));
     let link_source = home.join(format!(".cytrick/{}/{}", data.name, name));
@@ -370,10 +404,11 @@ pub fn update(folder: &str) -> ! {
     env::set_current_dir(folder).expect("Failed to set current directory");
 
     let _ = Command::new(updater)
-        .args([old_cwd])
+        .args([old_cwd.to_str().expect("Path isn't valid UTF-8"), "no"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+
     exit(0);
 }

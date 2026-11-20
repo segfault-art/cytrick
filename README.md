@@ -1,3 +1,5 @@
+<!--suppress SpellCheckingInspection -->
+
 # Cytrick
 
 **Install GitHub projects without having to figure out how to build them.**
@@ -61,7 +63,7 @@ target/release/cytrick setup   # creates ~/.cytrick, the project database and up
 target/release/cytrick run     # runs the .trick file in the current directory
 ```
 
-`setup` adds `~/.cytrick/bin` to your `PATH`. Open a new terminal afterwards so the change takes effect. If `cyt` is
+`setup` adds `~/.cytrick/bin` to your `PATH`. Open a new terminal afterward so the change takes effect. If `cyt` is
 still not found, add the folder manually:
 
 ```bash
