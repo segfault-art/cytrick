@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "cytrick"
-version = "0.1.3"
+version = "0.1.0"
 dependencies = [
  "clap",
  "home",

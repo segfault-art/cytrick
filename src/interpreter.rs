@@ -132,7 +132,7 @@ fn system(command: &str) -> io::Result<ExitStatus> {
 }
 
 pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
-    let mut err: Option<String> = None;
+    let home = home_dir().ok_or(String::from("Cannot get home dir"))?;
     let mut binaries: Vec<String> = Vec::new();
     let conn = sql::create_connection()
         .map_err(|e| format!("Cannot open data file: {e}, try run `cyt setup`"))?;
@@ -153,10 +153,25 @@ pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
             }
 
             Err(e) => {
-                err = Some(format!(
-                    "Error executing command ({command}): {e}. Command {i}"
+                if let Err(err) = fs::remove_dir_all(home.join(".cytrick").join(&trick.name))
+                    && err.kind() != io::ErrorKind::NotFound
+                {
+                    eprintln!("Error removing project dir: {err}. Try remove manually later");
+                }
+
+                for binary in &binaries {
+                    println!("Removing binary {binary}");
+
+                    if let Err(err) = fs::remove_file(home.join(".cytrick/bin").join(binary)) {
+                        eprintln!(
+                            "Error removing binary {binary}: {err}. Try remove manually later"
+                        );
+                    }
+                }
+
+                return Err(format!(
+                    "Error executing command ({command}): {e}. Command nº {i}"
                 ));
-                break;
             }
         }
     }
@@ -182,14 +197,13 @@ pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
                 ]),
             )
             .map_err(|e| format!("Failed to update project in database: {e}"))?;
-        } else {
-            return Err(format!("Failed to add project to database: {err}"));
-        }
-    }
 
-    match err {
-        Some(err) => Err(err),
-        None => Ok(()),
+            Ok(())
+        } else {
+            Err(format!("Failed to add project to database: {err}"))
+        }
+    } else {
+        Ok(())
     }
 }
 
@@ -226,7 +240,28 @@ fn process_args(args: &[&str]) -> Vec<String> {
                     i += 2;
                 }
 
-                // More modifiers in future
+                "%{win}%" => {
+                    if args.len() == i + 1 {
+                        eprintln!("Warning: Unused modifier 'win'");
+                    } else {
+                        #[cfg(windows)]
+                        result.push(args[i + 1].to_string());
+                    }
+
+                    i += 2;
+                }
+
+                "%{unix}%" => {
+                    if args.len() == i + 1 {
+                        eprintln!("Warning: Unused modifier 'unix'");
+                    } else {
+                        #[cfg(unix)]
+                        result.push(args[i + 1].to_string());
+                    }
+
+                    i += 2;
+                }
+
                 _ => {
                     eprintln!("Warning: Unknown modifier '{}'", args[i]);
 
