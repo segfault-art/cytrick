@@ -24,7 +24,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             name: cytrick-windows-x86_64.exe
             bin: cytrick.exe
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             name: cytrick-macos-x86_64
             bin: cytrick
