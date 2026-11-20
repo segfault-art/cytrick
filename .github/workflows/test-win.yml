@@ -1,9 +1,23 @@
 name: test-win
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore: [ '**.md' ]
+  pull_request:
+    paths-ignore: [ '**.md' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -14,4 +28,4 @@ jobs:
       - name: Install
         run: target\release\cytrick.exe run
       - name: Test
-        run: cyt version
+        run: '%USERPROFILE%\.cytrick\bin\cyt version'
