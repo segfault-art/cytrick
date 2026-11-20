@@ -28,6 +28,7 @@ struct Cli {
 enum Commands {
     Version,
     Setup,
+    List,
     Run {
         #[arg(short, long, default_value = "default")]
         file: String,
@@ -51,6 +52,10 @@ enum Commands {
     Remove {
         project: String,
     },
+
+    Query {
+        project: String,
+    },
 }
 
 fn main() {
@@ -65,6 +70,20 @@ fn main() {
             if let Err(err) = setup::setup() {
                 eprintln!("Error during setup: {err}");
                 exit(1);
+            }
+        }
+
+        Some(Commands::List) => {
+            let names = match manager::list_all() {
+                Ok(names) => names,
+                Err(err) => {
+                    eprintln!("{err}");
+                    exit(1);
+                }
+            };
+
+            for name in names {
+                println!("{name}");
             }
         }
 
@@ -123,6 +142,24 @@ fn main() {
             if let Err(err) = manager::remove_project(&project) {
                 eprintln!("Cannot remove project: {err}");
             }
+        }
+
+        Some(Commands::Query { project }) => {
+            let project = match manager::query_project(&project) {
+                Ok(project) => project,
+                Err(err) => {
+                    eprintln!("Cannot query project: {err}");
+                    exit(1);
+                }
+            };
+
+            println!(
+                "binaries: {}\nversion: {}\nname: {}\nrepo: {}",
+                project.binaries.join(", "),
+                project.version,
+                project.name,
+                project.repo.unwrap_or(String::from("No repo")),
+            )
         }
 
         None => {

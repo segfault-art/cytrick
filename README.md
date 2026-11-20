@@ -1,5 +1,3 @@
-<!--suppress SpellCheckingInspection -->
-
 # Cytrick
 
 **Install GitHub projects without having to figure out how to build them.**
@@ -12,7 +10,7 @@ instructions needed to prepare and install a project.
 
 ## Goal
 
-Imagine finding an interesting project on GitHub. You find a repository and normally you would have to install a
+Imagine finding an interesting project on GitHub. You find a repository, and normally you would have to install a
 compiler, configure the environment, install dependencies, run several commands, and finally figure out where to put the
 executable.
 
@@ -24,28 +22,33 @@ cyt install user/project
 
 ## Current Status
 
-Cytrick is under active development and already supports the full lifecycle of installing, updating, and removing projects.
+Cytrick is under active development and already supports the full lifecycle of installing, updating, and removing
+projects.
 
 **Implemented features:**
 
 - **GitHub Integration:** Fetching and installing the latest release of a repository (`cyt install user/repo`).
-- **Project Removal:** Uninstalling projects, cleaning up their directories, symlinks, and database entries (`cyt remove <project>`).
-- **Self-Updating:** Updating Cytrick either from a local source folder (`cyt update`) or directly from GitHub (`cyt update --web`).
+- **Project Removal:** Uninstalling projects, cleaning up their directories, symlinks, and database entries
+  (`cyt remove <project>`).
+- **Self-Updating:** Updating Cytrick either from a local source folder (`cyt update`) or directly from GitHub
+  (`cyt update --web`).
 - **OS-Specific Configurations:** Automatic detection of `.trick.unix` and `.trick.win` files, falling back to `.trick`.
-- **Cross-Platform Binary Modifiers:** Automatic executable extension handling via `%{bin}%` (appends `.exe` on Windows).
+- **Cross-Platform Modifiers:** Conditional argument handling via `%{bin}%`, `%{win}%`, and `%{unix}%`.
 - **Local Interpreter & Execution:**
-  - Running external programs directly (`run`).
-  - Executing commands through the system shell (`shell`).
-  - Downloading files over HTTP(S) (`download`).
-  - Extracting ZIP archives with optional root-folder unwrapping (`extract ... no-root`).
-  - Installing files and creating `PATH` symlinks for binaries (`install` / `install bin`).
-- **Local Tracking:** Keeping track of installed projects, versions, binaries, and repositories in a local SQLite database.
+    - Running external programs directly (`run`).
+    - Executing commands through the system shell (`shell`).
+    - Downloading files over HTTP(S) (`download`).
+    - Extracting ZIP archives with optional root-folder unwrapping (`extract ... no-root`).
+    - Installing files and creating `PATH` symlinks for binaries (`install` / `install bin`).
+- **Local Tracking:** Keeping track of installed projects, versions, binaries, and repositories in a local SQLite
+  database. **Project Inspection & Tracking:** Querying installed project details (`cyt query <project>`) and tracking
+  versions, binaries, and repositories in a local SQLite database.
+- **Listing Projects:** Listing installed projects via a CLI command (e.g., `cyt list`).
 
 **Planned / Not implemented yet:**
 
 - Extracting archive formats other than ZIP (such as `.tar.gz` or `.tar.xz`).
 - Installing specific versions, tags, or branches from GitHub (currently fetches `releases/latest`).
-- Listing installed projects via a CLI command (e.g., `cyt list`).
 
 ## Getting Started
 
@@ -75,14 +78,16 @@ cyt version
 
 ### Commands
 
-| Command                                           | Description                                                                                                                   |
-|---------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `cyt setup`                                       | Creates the `~/.cytrick` directories and the project database, and adds `~/.cytrick/bin` to your `PATH`. Run it once.         |
-| `cyt install <user/repo>`                         | Downloads the latest GitHub release for the repository and executes its `.trick` file.                                        |
-| `cyt remove <project>`                            | Removes an installed project, its symlinks in `~/.cytrick/bin`, its files, and its database record.                           |
-| `cyt run [--file <path>] [--repo <user/repo>]`    | Runs a `.trick` file locally. Defaults to `.trick.unix`/`.trick.win`, falling back to `.trick` in the current directory.      |
-| `cyt update [--folder <path> \| --web]`           | Updates Cytrick from a local source folder (default `.`) or fetches the latest release directly from GitHub (`--web`).        |
-| `cyt version`                                     | Shows the installed version of Cytrick.                                                                                       |
+| Command                                        | Description                                                                                                              |
+|------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `cyt setup`                                    | Creates the `~/.cytrick` directories and the project database, and adds `~/.cytrick/bin` to your `PATH`. Run it once.    |
+| `cyt install <user/repo>`                      | Downloads the latest GitHub release for the repository and executes its `.trick` file.                                   |
+| `cyt remove <project>`                         | Removes an installed project, its symlinks in `~/.cytrick/bin`, its files, and its database record.                      |
+| `cyt run [--file <path>] [--repo <user/repo>]` | Runs a `.trick` file locally. Defaults to `.trick.unix`/`.trick.win`, falling back to `.trick` in the current directory. |
+| `cyt update [--folder <path> \| --web]`        | Updates Cytrick from a local source folder (default `.`) or fetches the latest release directly from GitHub (`--web`).   |
+| `cyt version`                                  | Shows the installed version of Cytrick.                                                                                  |
+| `cyt query`                                    | Displays details of an installed project (`name`, `version`, `binaries`, and `repo`).                                    |
+| `cyt list`                                     | Displays all installed projects.                                                                                         |
 
 ### Updating Cytrick
 
@@ -107,6 +112,7 @@ background, the terminal prompt may return before the build/download finishes.
 The `.trick` file describes a project and its build and installation instructions using YAML (parsed via `noyalib`).
 
 When running `cyt run` without `--file`, Cytrick automatically looks for OS-specific files first:
+
 - On Unix-like systems (Linux, macOS): `.trick.unix` $\rightarrow$ `.trick`
 - On Windows: `.trick.win` $\rightarrow$ `.trick`
 
@@ -150,7 +156,11 @@ which command failed. Relative paths are resolved from the folder where Cytrick 
 
 Cytrick supports inline modifiers in instruction arguments:
 
-- `%{bin}% <path>`: Automatically appends the platform's executable suffix to the following argument (`.exe` on Windows, empty on Unix). For example, `%{bin}% target/release/app` becomes `target/release/app.exe` on Windows and `target/release/app` on Linux/macOS.
+- `%{bin}% <path>`: Automatically appends the platform's executable suffix to the following argument (`.exe` on Windows,
+  empty on Unix). For example, `%{bin}% target/release/app` becomes `target/release/app.exe` on Windows and
+  `target/release/app` on Linux/macOS.
+- `%{win}% <arg>`: Includes `<arg>` only on Windows; omits it (along with `<arg>`) on Unix-like systems.
+- `%{unix}% <arg>`: Includes `<arg>` only on Unix-like systems; omits it (along with `<arg>`) on Windows.
 
 ### Installing Files & Binaries
 
@@ -183,7 +193,8 @@ build:
 ```
 
 Using `no-root` is especially useful for GitHub source archives, which usually wrap all files inside a single
-`repo-tag/` root directory. Archive entries are extracted safely, rejecting path-traversal attempts (such as `../../file`).
+`repo-tag/` root directory. Archive entries are extracted safely, rejecting path-traversal attempts (such as
+`../../file`).
 
 ## Directories
 
@@ -208,13 +219,17 @@ Re-installing an already registered project updates its database entry.
 - A shell compatible with the operating system when using `shell` (`$SHELL` or `/bin/sh` on Unix, `cmd.exe` on Windows).
 - Any build tools or compilers required by the specific projects you choose to install.
 
-SQLite is bundled, and HTTP downloads/ZIP extraction are handled natively, so external tools like `curl` or `unzip` are not required.
+SQLite is bundled, and HTTP downloads/ZIP extraction are handled natively, so external tools like `curl` or `unzip` are
+not required.
 
 ## Limitations
 
-- Instruction arguments are split on whitespace, so file paths or arguments containing spaces are not currently supported in `run`, `download`, `extract`, and `install`.
-- `cyt update` runs silently in the background (`stdin`/`stdout`/`stderr` redirected to null), so build or download errors are not displayed in the terminal.
-- `cyt install <user/repo>` currently requires the repository to have a published GitHub Release (`releases/latest`) containing a `.trick` file at its root.
+- Instruction arguments are split on whitespace, so file paths or arguments containing spaces are not currently
+  supported in `run`, `download`, `extract`, and `install`.
+- `cyt update` runs silently in the background (`stdin`/`stdout`/`stderr` redirected to null), so build or download
+  errors are not displayed in the terminal.
+- `cyt install <user/repo>` currently requires the repository to have a published GitHub Release (`releases/latest`)
+  containing a `.trick` file at its root.
 - On Windows, creating symbolic links requires Administrator privileges or Developer Mode enabled.
 - Only `.zip` archives are supported by the `extract` instruction.
 

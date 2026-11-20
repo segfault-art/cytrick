@@ -84,13 +84,13 @@ pub fn get_project(conn: &Connection, project_name: &str) -> rusqlite::Result<Pr
         |row| {
             Ok(Project {
                 binaries: row
-                    .get::<usize, String>(0)?
+                    .get::<usize, String>(1)?
                     .split(",")
                     .map(str::to_owned)
                     .collect::<Vec<String>>(),
 
                 version: {
-                    let value = row.get::<usize, String>(1)?;
+                    let value = row.get::<usize, String>(2)?;
 
                     let mut split = value.splitn(3, '.').map(str::to_string);
 
@@ -104,9 +104,14 @@ pub fn get_project(conn: &Connection, project_name: &str) -> rusqlite::Result<Pr
                     }
                 },
 
-                name: row.get(2)?,
-                repo: row.get(3)?,
+                name: row.get(3)?,
+                repo: row.get(4)?,
             })
         },
     )
+}
+
+pub fn get_all(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT name FROM project")?;
+    stmt.query_map([], |row| row.get(0))?.collect()
 }

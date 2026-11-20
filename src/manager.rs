@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::sql;
+use crate::sql::Project;
 use home::home_dir;
 use std::fs::remove_dir_all;
 use symlink::remove_symlink_file;
@@ -28,6 +29,10 @@ pub fn remove_project(project_name: &str) -> Result<(), String> {
     };
 
     for binary in project.binaries {
+        if binary.is_empty() {
+            continue;
+        }
+
         remove_symlink_file(home.join(".cytrick/bin").join(&binary))
             .map_err(|e| format!("Error removing symlink: {e}"))?;
 
@@ -37,8 +42,26 @@ pub fn remove_project(project_name: &str) -> Result<(), String> {
     remove_dir_all(home.join(".cytrick").join(project_name))
         .map_err(|e| format!("Error removing project directory: {e}"))?;
 
-    sql::delete_project(&conn, project_name)
-        .map_err(|e| format!("Failed to delete project from database: {e}"))?;
+    sql::delete_project(&conn, project_name).map_err(|e| {
+        format!(
+            "Failed to delete project from database (try run `cyt db remove {project_name}`): {e}"
+        )
+    })?;
 
     Ok(())
+}
+
+pub fn query_project(project_name: &str) -> Result<Project, String> {
+    let conn = sql::create_connection()
+        .map_err(|e| format!("Failed to create connection with database: {e}"))?;
+
+    sql::get_project(&conn, project_name)
+        .map_err(|e| format!("Failed to get project from database: {e}"))
+}
+
+pub fn list_all() -> Result<Vec<String>, String> {
+    let conn = sql::create_connection()
+        .map_err(|e| format!("Failed to create connection with database: {e}"))?;
+
+    sql::get_all(&conn).map_err(|e| format!("Failed to get all projects: {e}"))
 }

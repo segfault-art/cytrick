@@ -15,16 +15,6 @@ use std::path::PathBuf;
 use std::{env, fs};
 
 #[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct Repository {
-    pub name: String,
-    pub full_name: String,
-    pub html_url: String,
-    pub description: Option<String>,
-    pub stargazers_count: u64,
-}
-
-#[derive(Deserialize, Debug)]
 struct Release {
     #[allow(dead_code)]
     tag_name: String,
