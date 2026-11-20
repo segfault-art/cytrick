@@ -111,8 +111,6 @@ fn main() {
             } else {
                 interpreter::update(&folder);
             }
-
-            interpreter::update(&folder);
         }
 
         Some(Commands::Install { repo }) => {

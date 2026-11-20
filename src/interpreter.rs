@@ -217,7 +217,7 @@ fn process_args(args: &[&str]) -> Vec<String> {
         if args[i].starts_with("%{") && args[i].ends_with("}%") {
             match args[i] {
                 "%{bin}%" => {
-                    if args.len() == i {
+                    if args.len() == i + 1 {
                         eprintln!("Warning: Unused modifier 'bin'");
                     } else {
                         result.push(format!("{}{EXE_SUFFIX}", args[i + 1]));
