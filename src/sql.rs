@@ -9,13 +9,16 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::interpreter::Version;
+use std::collections::HashMap;
+
 use home::home_dir;
 use rusqlite::Connection;
-use std::collections::HashMap;
+
+use crate::interpreter::Version;
 
 pub struct Project {
     pub binaries: Vec<String>,
+    pub extensions: Vec<String>,
     pub version: Version,
     pub name: String,
     pub repo: Option<String>,
@@ -23,6 +26,7 @@ pub struct Project {
 
 pub struct ProjectRef<'a> {
     pub binaries: &'a [&'a str],
+    pub extensions: &'a [&'a str],
     pub version: &'a Version,
     pub name: &'a str,
     pub repo: Option<&'a str>,
@@ -38,9 +42,10 @@ pub fn create_connection() -> Result<Connection, String> {
 
 pub fn new_project(conn: &Connection, project: &ProjectRef) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO project (binaries, version, name, repo) VALUES (?, ?, ?, ?)",
+        "INSERT INTO project (binaries, extensions, version, name, repo) VALUES (?, ?, ?, ?, ?)",
         (
             project.binaries.join(","),
+            project.extensions.join(","),
             project.version.to_string(),
             project.name,
             project.repo,
@@ -57,12 +62,14 @@ pub fn update_project(
     conn.execute(
         "UPDATE project SET
             binaries = COALESCE(?, binaries),
+            extensions = COALESCE(?, extensions),
             version = COALESCE(?, version),
             name = COALESCE(?, name),
             repo = COALESCE(?, repo)
         WHERE name = ?",
         (
             update.get("binaries"),
+            update.get("extensions"),
             update.get("version"),
             update.get("name"),
             update.get("repo"),
@@ -89,8 +96,14 @@ pub fn get_project(conn: &Connection, project_name: &str) -> rusqlite::Result<Pr
                     .map(str::to_owned)
                     .collect::<Vec<String>>(),
 
+                extensions: row
+                    .get::<usize, String>(2)?
+                    .split(",")
+                    .map(str::to_owned)
+                    .collect::<Vec<String>>(),
+
                 version: {
-                    let value = row.get::<usize, String>(2)?;
+                    let value = row.get::<usize, String>(3)?;
 
                     let mut split = value.splitn(3, '.').map(str::to_string);
 
@@ -104,8 +117,8 @@ pub fn get_project(conn: &Connection, project_name: &str) -> rusqlite::Result<Pr
                     }
                 },
 
-                name: row.get(3)?,
-                repo: row.get(4)?,
+                name: row.get(4)?,
+                repo: row.get(5)?,
             })
         },
     )

@@ -9,10 +9,14 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::interpreter::{deserialize, execute_all, extract};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
+
 use serde::Deserialize;
-use std::path::PathBuf;
-use std::{env, fs};
+
+use crate::interpreter::{deserialize, execute_all, extract};
 
 #[derive(Deserialize, Debug)]
 struct Release {
@@ -57,12 +61,12 @@ fn download_project(project: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn install_github_project(project: &str) -> Result<(), String> {
+pub fn install_github_project(project: &str, load: bool) -> Result<(), String> {
     download_project(project)?;
-    let trick = deserialize(PathBuf::from("tmp/.trick"))
+    let trick = deserialize(Path::new("tmp/.trick"))
         .map_err(|e| format!("Error deserializing trick file: {e}"))?;
     env::set_current_dir("tmp").map_err(|e| format!("Error setting current_dir: {e}"))?;
-    execute_all(trick, Some(project))?;
+    execute_all(trick, Some(project), load, true)?;
 
     match env::current_dir() {
         Err(err) => {

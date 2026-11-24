@@ -10,12 +10,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use clap::{Parser, Subcommand};
-use cytrick::github::install_github_project;
-use cytrick::interpreter;
-use cytrick::manager;
-use cytrick::setup;
-use std::process::{Command, Stdio};
-use std::{path::PathBuf, process::exit};
+use cytrick::{github::install_github_project, interpreter, manager, setup};
+use home::home_dir;
+use std::env::{current_dir, set_current_dir};
+use std::{fs::remove_file, path::PathBuf, process::exit};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -26,27 +24,33 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    #[command(hide = true)]
+    AfterUpdate,
     Version,
     Setup,
     List,
     Run {
-        #[arg(short, long, default_value = "default")]
+        #[arg(short, long, default_value = "default", conflicts_with = "nothing")]
         file: String,
 
-        #[arg(short, long)]
-        repo: Option<String>,
-    },
-
-    Update {
-        #[arg(short, long, default_value = ".", conflicts_with = "web")]
+        #[arg(short, long, default_value = ".", conflicts_with = "nothing")]
         folder: String,
 
-        #[arg(long)]
-        web: bool,
+        #[arg(short, long, conflicts_with = "nothing")]
+        repo: Option<String>,
+
+        #[arg(short, long)]
+        no_load: bool,
+
+        #[arg(short, long)]
+        nothing: bool,
     },
 
     Install {
         repo: String,
+
+        #[arg(short, long)]
+        no_load: bool,
     },
 
     Remove {
@@ -56,12 +60,26 @@ enum Commands {
     Query {
         project: String,
     },
-}
 
+    Upgrade {
+        #[arg(conflicts_with = "web", default_value = ".")]
+        dir: PathBuf,
+
+        #[arg(short, long)]
+        web: bool,
+    },
+}
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Commands::AfterUpdate) => {
+            let home = home_dir().expect("Error getting home dir");
+
+            remove_file(home.join(".cytrick/Cytrick/cyt.tmp"))
+                .expect("Error deleting temporary file");
+        }
+
         Some(Commands::Version) => {
             println!("Cytrick version {}", env!("CARGO_PKG_VERSION"));
         }
@@ -87,8 +105,18 @@ fn main() {
             }
         }
 
-        Some(Commands::Run { file, repo }) => {
+        Some(Commands::Run {
+            file,
+            folder,
+            repo,
+            no_load,
+            nothing,
+        }) => {
             #[cfg(unix)]
+            if nothing {
+                interpreter::nothing(!no_load);
+            }
+
             let mut final_file = PathBuf::from(".trick.unix");
 
             #[cfg(windows)]
@@ -102,38 +130,31 @@ fn main() {
                 final_file = PathBuf::from(file);
             }
 
-            let trick = match interpreter::deserialize(final_file) {
+            let pwd = current_dir().expect("Error getting current directory");
+            set_current_dir(folder).expect("Error setting current directory");
+
+            let trick = match interpreter::deserialize(&final_file) {
                 Ok(trick) => trick,
                 Err(err) => {
                     eprintln!("Cannot deserialize .trick file: {err}");
+                    set_current_dir(pwd).expect("Error setting current directory");
                     exit(1);
                 }
             };
 
             println!("Installing {} version {}", trick.name, trick.version);
-            if let Err(err) = interpreter::execute_all(trick, repo.as_deref()) {
+            if let Err(err) = interpreter::execute_all(trick, repo.as_deref(), !no_load, true) {
                 eprintln!("Error running .trick file: {err}");
+                set_current_dir(pwd).expect("Error setting current directory");
                 exit(1);
             }
 
             println!("Installed project successfully!");
+            set_current_dir(pwd).expect("Error setting current directory");
         }
 
-        Some(Commands::Update { folder, web }) => {
-            if web {
-                let _ = Command::new("updater")
-                    .args(["--", "yes"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-            } else {
-                interpreter::update(&folder);
-            }
-        }
-
-        Some(Commands::Install { repo }) => {
-            if let Err(err) = install_github_project(&repo) {
+        Some(Commands::Install { repo, no_load }) => {
+            if let Err(err) = install_github_project(&repo, !no_load) {
                 eprintln!("Cannot install project: {err}");
             }
         }
@@ -160,6 +181,10 @@ fn main() {
                 project.name,
                 project.repo.unwrap_or(String::from("No repo")),
             )
+        }
+
+        Some(Commands::Upgrade { dir, web }) => {
+            interpreter::upgrade(&dir, web);
         }
 
         None => {

@@ -1,16 +1,19 @@
 [package]
 name = "cytrick"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-clap = { version = "4.6.8", features = ["derive"] }
+clap = { version = "4.6.9", features = ["derive"] }
 home = "0.5.12"
-noyalib = "0.0.63"
+libloading = "0.9.1"
+noyalib = "0.0.64"
 onpath = "0.2.0"
+rand = "0.10.4"
 reqwest = { version = "0.13.5", features = ["blocking", "json", "query"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
+safer-ffi = "0.2.0-rc1"
 serde = { version = "1.0.229", features = ["derive"] }
 symlink = "0.1.0"
-zip = "9.7.3"
+zip = "9.8.2"

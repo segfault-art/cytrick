@@ -9,20 +9,45 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::sql;
 use home::home_dir;
+use rand::prelude::IndexedRandom;
 use rusqlite::ErrorCode;
+use safer_ffi::prelude::*;
 use serde::{Deserialize, Deserializer};
-use std::collections::HashMap;
-use std::env::consts::EXE_SUFFIX;
-use std::process::exit;
+use std::env::consts::{DLL_PREFIX, DLL_SUFFIX};
 use std::{
-    env, fmt, fs, io,
-    path::PathBuf,
-    process::{Command, ExitStatus, Stdio},
+    cell::RefCell,
+    collections::HashMap,
+    env::{self, consts::EXE_SUFFIX},
+    fmt, fs, io,
+    mem::transmute,
+    path::{Path, PathBuf},
+    process::{Command, ExitStatus, exit},
 };
 use symlink::{remove_symlink_file, symlink_file};
 use zip::{ZipArchive, read::root_dir_common_filter};
+
+use crate::{extension, extension::load_all, github::install_github_project, sql};
+
+macro_rules! installer_factory {
+    ($fn_name:ident, $folder:expr, $datat:expr) => {
+        fn $fn_name(args: &[&str], data: &ExecutionData) -> Result<Status, String> {
+            let home = home_dir().ok_or(String::from("Cannot get the home folder"))?;
+            let result = install_something(args, data, &home.join(".cytrick").join($folder))?;
+
+            Ok(Status::Installed {
+                data: $datat,
+                name: result.name,
+                file: result.file,
+                source: result.source,
+            })
+        }
+    };
+}
+
+thread_local! {
+    pub static MODIFIERS: RefCell<HashMap<String, extension::ModifierHandler>> = RefCell::new(HashMap::new());
+}
 
 #[derive(Debug)]
 pub struct Version {
@@ -48,7 +73,7 @@ pub struct ExecutionData<'a> {
 #[allow(dead_code)]
 pub enum Status {
     Installed {
-        bin: bool,
+        data: DataType,
         name: String,
         file: PathBuf,
         source: PathBuf,
@@ -72,6 +97,18 @@ pub enum Status {
     Shell {
         command: String,
     },
+}
+
+pub enum DataType {
+    Binary,
+    Extension,
+    File,
+}
+
+struct InstalledSomething {
+    name: String,
+    file: PathBuf,
+    source: PathBuf,
 }
 
 impl fmt::Display for Version {
@@ -102,7 +139,7 @@ where
     })
 }
 
-pub fn deserialize(path: PathBuf) -> Result<Trick, Box<dyn std::error::Error>> {
+pub fn deserialize(path: &Path) -> Result<Trick, Box<dyn std::error::Error>> {
     let yaml = fs::read_to_string(path)?;
     let config: Trick = noyalib::from_str(&yaml)?;
 
@@ -131,9 +168,19 @@ fn system(command: &str) -> io::Result<ExitStatus> {
     process.status()
 }
 
-pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
+pub fn execute_all(
+    trick: Trick,
+    repo: Option<&str>,
+    load: bool,
+    delete: bool,
+) -> Result<(), String> {
+    if load {
+        load_all().map_err(|e| format!("Error loading extensions: {e}"))?;
+    }
+
     let home = home_dir().ok_or(String::from("Cannot get home dir"))?;
     let mut binaries: Vec<String> = Vec::new();
+    let mut extensions: Vec<String> = Vec::new();
     let conn = sql::create_connection()
         .map_err(|e| format!("Cannot open data file: {e}, try run `cyt setup`"))?;
 
@@ -142,13 +189,27 @@ pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
         name: &trick.name,
     };
 
+    if delete && let Ok(project) = sql::get_project(&conn, &trick.name) {
+        if let Err(err) = fs::remove_dir_all(home.join(".cytrick").join(&trick.name)) {
+            eprintln!("Error removing old project folder: {err}");
+        }
+
+        for binary in &project.binaries {
+            if let Err(err) = fs::remove_file(binary) {
+                eprintln!("Error removing binary {binary}: {err}");
+            }
+        }
+    }
+
     for (i, command) in (1..).zip(trick.build) {
         match execute(&command, &data) {
             Ok(status) => {
-                if let Status::Installed { bin, name, .. } = status
-                    && bin
-                {
-                    binaries.push(name);
+                if let Status::Installed { data, name, .. } = status {
+                    match data {
+                        DataType::Binary => binaries.push(name),
+                        DataType::Extension => extensions.push(name),
+                        _ => {}
+                    }
                 }
             }
 
@@ -169,6 +230,14 @@ pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
                     }
                 }
 
+                for extension in &extensions {
+                    println!("Removing extension {extension}");
+
+                    if let Err(err) = fs::remove_file(home.join(".cytrick/ext").join(extension)) {
+                        eprintln!("Error removing extension {extension}: {err}",)
+                    }
+                }
+
                 return Err(format!(
                     "Error executing command ({command}): {e}. Command nº {i}"
                 ));
@@ -180,6 +249,7 @@ pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
         &conn,
         &sql::ProjectRef {
             binaries: &binaries.iter().map(String::as_str).collect::<Vec<&str>>(),
+            extensions: &extensions.iter().map(String::as_str).collect::<Vec<&str>>(),
             version: &trick.version,
             name: &trick.name,
             repo,
@@ -187,11 +257,13 @@ pub fn execute_all(trick: Trick, repo: Option<&str>) -> Result<(), String> {
     ) {
         if let Some(ErrorCode::ConstraintViolation) = err.sqlite_error_code() {
             eprintln!("Project already installed, overwriting...");
+
             sql::update_project(
                 &conn,
                 &trick.name,
                 &HashMap::from([
                     ("binaries", Some::<&str>(&binaries.join(","))),
+                    ("extensions", Some::<&str>(&extensions.join(","))),
                     ("version", Some(&trick.version.to_string())),
                     ("repo", repo),
                 ]),
@@ -262,10 +334,50 @@ fn process_args(args: &[&str]) -> Vec<String> {
                     i += 2;
                 }
 
-                _ => {
-                    eprintln!("Warning: Unknown modifier '{}'", args[i]);
+                "%{dll}%" => {
+                    if args.len() == i + 1 {
+                        eprintln!("Warning: Unused modifier 'lib'");
+                    } else {
+                        result.push(format!("{DLL_PREFIX}{}{DLL_SUFFIX}", args[i + 1]));
+                    }
+                }
 
-                    i += 1;
+                _ => {
+                    let modifier = match MODIFIERS.with_borrow(|mods| mods.get(args[i]).copied()) {
+                        Some(m) => m,
+                        None => {
+                            eprintln!("Warning: Unknown modifier: '{}'", args[i]);
+                            i += 1;
+                            continue;
+                        }
+                    };
+
+                    unsafe {
+                        let owned_args: Vec<char_p::Box> =
+                            args.iter().map(|v| char_p::new(*v)).collect();
+
+                        let args_refs: Vec<char_p::Ref<'_>> =
+                            owned_args.iter().map(char_p::Box::as_ref).collect();
+
+                        let args_c: c_slice::Ref<'_, char_p::Ref<'_>> =
+                            c_slice::Ref::from(&args_refs[..]);
+
+                        let mut owned_result: Vec<char_p::Box> =
+                            result.iter().map(|s| char_p::new(s.as_str())).collect();
+
+                        let result_c: c_slice::Mut<'_, char_p::Box> =
+                            c_slice::Mut::from(owned_result.as_mut_slice());
+
+                        let args_static = transmute::<
+                            c_slice::Ref<'_, char_p::Ref<'_>>,
+                            c_slice::Ref<'static, char_p::Ref<'static>>,
+                        >(args_c);
+
+                        let result_static: c_slice::Mut<'static, char_p::Box> =
+                            transmute::<c_slice::Mut<'_, _>, c_slice::Mut<'static, _>>(result_c);
+
+                        modifier(i, args_static, result_static);
+                    }
                 }
             }
         } else {
@@ -366,7 +478,7 @@ pub fn install(args: &[&str], data: &ExecutionData) -> Result<Status, String> {
     fs::copy(source, &file).map_err(|e| format!("Cannot copy file: {e}"))?;
 
     Ok(Status::Installed {
-        bin: false,
+        data: DataType::File,
         name,
         file,
         source: source.into(),
@@ -385,11 +497,15 @@ fn get_name(path: &str, new_name: Option<&str>) -> Result<String, String> {
         .to_owned())
 }
 
-pub fn install_bin(args: &[&str], data: &ExecutionData) -> Result<Status, String> {
+fn install_something(
+    args: &[&str],
+    data: &ExecutionData,
+    folder: &Path,
+) -> Result<InstalledSomething, String> {
     let home = home_dir().ok_or(String::from("Cannot get the home folder"))?;
     let name = get_name(args[1], args.get(2).copied())?;
-    let source = args.get(1).ok_or(String::from("No source file"))?;
-    let file = home.join(format!(".cytrick/bin/{}", name));
+    let file = folder.join(&name);
+    let source = PathBuf::from(args.get(1).ok_or(String::from("No source file"))?);
     let link_source = home.join(format!(".cytrick/{}/{}", data.name, name));
 
     install(args.get(1..).unwrap(), data)?;
@@ -405,13 +521,11 @@ pub fn install_bin(args: &[&str], data: &ExecutionData) -> Result<Status, String
         }
     }
 
-    Ok(Status::Installed {
-        bin: true,
-        name,
-        file,
-        source: source.into(),
-    })
+    Ok(InstalledSomething { name, file, source })
 }
+
+installer_factory!(install_bin, "bin", DataType::Binary);
+installer_factory!(install_ext, "ext", DataType::Extension);
 
 fn execute_function(function: &str, args: &[&str], data: &ExecutionData) -> Result<Status, String> {
     match function {
@@ -423,27 +537,83 @@ fn execute_function(function: &str, args: &[&str], data: &ExecutionData) -> Resu
             install_bin(args, data)
         }
 
+        "install" if *args.first().ok_or(String::from("No source file"))? == "ext" => {
+            install_ext(args, data)
+        }
+
         "install" => install(args, data),
         _ => Err(format!("Unknown function: {function}")),
     }
 }
 
-pub fn update(folder: &str) -> ! {
-    let old_cwd = env::current_dir().expect("Cannot get current directory");
-    let updater = env::current_exe()
-        .expect("Failed to get current executable")
-        .parent()
-        .unwrap()
-        .join("updater");
+pub fn upgrade(dir: &Path, web: bool) -> ! {
+    let original = env::current_exe().expect("Cannot get binary directory");
 
-    env::set_current_dir(folder).expect("Failed to set current directory");
+    fs::rename(&original, original.with_extension("tmp")).expect("Cannot rename file");
+    println!("{}", original.display());
 
-    let _ = Command::new(updater)
-        .args([old_cwd.to_str().expect("Path isn't valid UTF-8"), "no"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    if web && let Err(err) = install_github_project("segfault-art/Cytrick", false) {
+        eprintln!("Error updating from github: {err}");
+        exit(1);
+    }
 
+    if !dir.is_empty() && !web {
+        let trick = match deserialize(&dir.join(".trick")) {
+            Ok(trick) => trick,
+            Err(err) => {
+                eprintln!("Error deserializing trick file: {err}");
+                exit(1);
+            }
+        };
+
+        if let Err(err) = execute_all(trick, Some("segfault-art/Cytrick"), false, false) {
+            eprintln!("Error executing trick file: {err}");
+            exit(1);
+        }
+    }
+
+    if let Err(err) = Command::new(&original).args(["after-update"]).spawn() {
+        eprintln!("Error executing clean after update: {err}");
+        exit(1);
+    }
+
+    exit(0);
+}
+
+pub fn nothing(load: bool) -> ! {
+    let version = Version {
+        major: 0,
+        minor: 0,
+        patch: 0,
+    };
+
+    let trick = Trick {
+        version,
+        name: String::from("Nothing"),
+        build: Vec::new(),
+    };
+
+    execute_all(trick, None, load, true).expect("Error executing trick file");
+
+    let conn = sql::create_connection().expect("Cannot create database connection");
+
+    sql::delete_project(&conn, "Nothing").expect("Cannot delete project from database");
+
+    let phrases = [
+        "Nothing to see here",
+        "Achievement unlocked: doing nothing",
+        "Absolutely nothing happened, and it was glorious",
+        "Zero changes, zero problems",
+        "I’ve done nothing, and I’m quite proud of it",
+        "Successfully did nothing",
+        "Done. (Nothing was changed, as expected)",
+        "0 files changed, 0 regrets",
+        "Nothing to do. Exactly as planned",
+        "A perfectly executed no-op",
+    ];
+
+    let mut rng = rand::rng();
+
+    println!("{}", phrases.choose(&mut rng).unwrap());
     exit(0);
 }

@@ -9,11 +9,12 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::sql;
-use crate::sql::Project;
-use home::home_dir;
 use std::fs::remove_dir_all;
+
+use home::home_dir;
 use symlink::remove_symlink_file;
+
+use crate::{sql, sql::Project};
 
 pub fn remove_project(project_name: &str) -> Result<(), String> {
     let home = home_dir().ok_or(String::from("Could not find home directory"))?;
@@ -33,20 +34,35 @@ pub fn remove_project(project_name: &str) -> Result<(), String> {
             continue;
         }
 
-        remove_symlink_file(home.join(".cytrick/bin").join(&binary))
-            .map_err(|e| format!("Error removing symlink: {e}"))?;
+        if let Err(err) = remove_symlink_file(home.join(".cytrick/bin").join(&binary)) {
+            return Err(format!(
+                "Failed to remove binary: {err}, try remove manually later"
+            ));
+        }
 
-        println!("Removed symlink: {binary}");
+        println!("Removed binary: {binary}");
     }
 
-    remove_dir_all(home.join(".cytrick").join(project_name))
-        .map_err(|e| format!("Error removing project directory: {e}"))?;
+    for extension in project.extensions {
+        if extension.is_empty() {
+            continue;
+        }
 
-    sql::delete_project(&conn, project_name).map_err(|e| {
-        format!(
-            "Failed to delete project from database (try run `cyt db remove {project_name}`): {e}"
-        )
-    })?;
+        if let Err(err) = remove_symlink_file(home.join(".cytrick/ext").join(&extension)) {
+            return Err(format!(
+                "Failed to remove extension: {err}, try remove manually later"
+            ));
+        }
+
+        println!("Removed extension: {extension}");
+    }
+
+    if let Err(err) = remove_dir_all(home.join(".cytrick").join(project_name)) {
+        eprintln!("Failed to remove project directory: {err}");
+    }
+
+    sql::delete_project(&conn, project_name)
+        .map_err(|e| format!("Failed to delete project from database: {e}"))?;
 
     Ok(())
 }
